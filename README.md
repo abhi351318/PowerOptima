@@ -123,3 +123,29 @@ npm run dev
 
 # The web dashboard is available at http://localhost:3000
 ```
+
+---
+
+## 6. Vercel Deployment Instructions
+
+This project is fully configured for zero-config deployment on Vercel (`vercel.json` included).
+
+### Method A: Deploy via GitHub / Vercel Dashboard (Recommended)
+1. Push this repository to GitHub or GitLab.
+2. In the [Vercel Dashboard](https://vercel.com/new), click **Add New Project** and import the repository.
+3. Framework Preset: **Vite** (auto-detected).
+4. Build Command: `npm run build` (auto-detected).
+5. Output Directory: `dist` (auto-detected).
+6. Click **Deploy**.
+
+### Method B: Deploy via Vercel CLI
+```bash
+# 1. Install Vercel CLI globally
+npm i -g vercel
+
+# 2. Deploy directly from repository root
+vercel
+
+# 3. For production release
+vercel --prod
+```
