@@ -1,15 +1,15 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
   signOut,
-  onAuthStateChanged,
   type User
 } from 'firebase/auth';
 import {
   getFirestore,
   doc,
+  getDoc,
   getDocFromServer,
   collection,
   query,
@@ -18,22 +18,33 @@ import {
   deleteDoc,
   orderBy
 } from 'firebase/firestore';
-import defaultFirebaseConfig from '../firebase-applet-config.json';
 import type { UserHistoryItem, TariffConfig } from './types';
 
-const firebaseConfig = {
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || defaultFirebaseConfig.projectId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || defaultFirebaseConfig.appId,
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || defaultFirebaseConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || defaultFirebaseConfig.authDomain,
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || defaultFirebaseConfig.firestoreDatabaseId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || defaultFirebaseConfig.storageBucket,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultFirebaseConfig.messagingSenderId,
+// Fallback configuration for project cd048fae-0d90-4965-bcf0-644f67b0a949
+const DEFAULT_FIREBASE_SETTINGS = {
+  projectId: 'gen-lang-client-0500905516',
+  appId: '1:554783610759:web:5d8123715acab0d65ce522',
+  apiKey: 'AIzaSyASNFHzPzR9MHVY82F9NYG4S710zPqth_s',
+  authDomain: 'gen-lang-client-0500905516.firebaseapp.com',
+  firestoreDatabaseId: 'ai-studio-cd048fae-0d90-4965-bcf0-644f67b0a949',
+  storageBucket: 'gen-lang-client-0500905516.firebasestorage.app',
+  messagingSenderId: '554783610759'
 };
 
-const app = initializeApp(firebaseConfig);
+const firebaseConfig = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || DEFAULT_FIREBASE_SETTINGS.projectId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || DEFAULT_FIREBASE_SETTINGS.appId,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || DEFAULT_FIREBASE_SETTINGS.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || DEFAULT_FIREBASE_SETTINGS.authDomain,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || DEFAULT_FIREBASE_SETTINGS.firestoreDatabaseId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || DEFAULT_FIREBASE_SETTINGS.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || DEFAULT_FIREBASE_SETTINGS.messagingSenderId,
+};
 
-// CRITICAL: The app will break without specifying firestoreDatabaseId
+// Initialize or reuse Firebase App
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+
+// CRITICAL: Specify firestoreDatabaseId
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
@@ -93,29 +104,63 @@ export async function testConnection(): Promise<boolean> {
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Client appears offline or check Firebase configuration:", error.message);
+      console.warn('Firebase client is offline or network restricted:', error.message);
     }
     return false;
   }
+}
+
+/**
+ * Translates Firebase Auth error codes into clear, actionable advice for users and deployment targets
+ */
+export function formatAuthErrorMessage(error: any): string {
+  const code = error?.code || '';
+  const hostname = window.location.hostname;
+
+  if (code === 'auth/unauthorized-domain') {
+    return `Domain "${hostname}" is not authorized in Firebase Auth. To allow sign-in from your Vercel deployment, add "${hostname}" in Firebase Console > Authentication > Settings > Authorized domains.`;
+  }
+  if (code === 'auth/popup-blocked') {
+    return 'The sign-in popup was blocked by your browser. Please allow popups for this site and click Google Login again.';
+  }
+  if (code === 'auth/popup-closed-by-user') {
+    return 'The Google sign-in window was closed before completing.';
+  }
+  if (code === 'auth/cancelled-popup-request') {
+    return 'A popup request was already in progress.';
+  }
+  if (code === 'auth/network-request-failed') {
+    return 'Network request failed. Please check your internet connection.';
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return 'Google provider is not enabled in Firebase Authentication console.';
+  }
+  return error?.message || 'Authentication encountered an unexpected error.';
 }
 
 // Sign in with Google
 export async function loginWithGoogle(): Promise<User> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
-    // Sync user profile document
     const user = result.user;
-    const userRef = doc(db, 'users', user.uid);
-    await setDoc(userRef, {
-      userId: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || 'Campus Energy Manager',
-      photoURL: user.photoURL || '',
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+
+    // Sync user profile document (wrapped safely so network/permission glitches don't break login)
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, {
+        userId: user.uid,
+        email: user.email || '',
+        displayName: user.displayName || 'Campus Energy Manager',
+        photoURL: user.photoURL || '',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (profileErr) {
+      console.warn('Profile sync notice:', profileErr);
+    }
+
     return user;
-  } catch (err) {
-    console.error("Google sign-in error", err);
+  } catch (err: any) {
+    console.error('Google sign-in error:', err);
     throw err;
   }
 }
@@ -125,7 +170,7 @@ export async function logoutUser(): Promise<void> {
   await signOut(auth);
 }
 
-// Save analysis run to history
+// Save analysis run to history (Firestore)
 export async function saveHistoryToFirestore(userId: string, item: Omit<UserHistoryItem, 'userId'>): Promise<void> {
   const path = `users/${userId}/history`;
   try {
@@ -139,7 +184,7 @@ export async function saveHistoryToFirestore(userId: string, item: Omit<UserHist
   }
 }
 
-// Fetch user history
+// Fetch user history (Firestore)
 export async function fetchUserHistory(userId: string): Promise<UserHistoryItem[]> {
   const path = `users/${userId}/history`;
   try {
@@ -151,7 +196,7 @@ export async function fetchUserHistory(userId: string): Promise<UserHistoryItem[
   }
 }
 
-// Delete user history entry
+// Delete user history entry (Firestore)
 export async function deleteHistoryEntry(userId: string, historyId: string): Promise<void> {
   const path = `users/${userId}/history/${historyId}`;
   try {
@@ -161,7 +206,7 @@ export async function deleteHistoryEntry(userId: string, historyId: string): Pro
   }
 }
 
-// Save user tariff config
+// Save user tariff config (Firestore)
 export async function saveTariffToFirestore(userId: string, tariff: TariffConfig): Promise<void> {
   const path = `users/${userId}/tariffs/${tariff.id}`;
   try {
@@ -185,7 +230,7 @@ export async function saveTariffToFirestore(userId: string, tariff: TariffConfig
   }
 }
 
-// Fetch user tariffs
+// Fetch user tariffs (Firestore)
 export async function fetchUserTariffs(userId: string): Promise<TariffConfig[]> {
   const path = `users/${userId}/tariffs`;
   try {
@@ -194,4 +239,104 @@ export async function fetchUserTariffs(userId: string): Promise<TariffConfig[]> 
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
   }
+}
+
+// Local Storage utilities for Guest/Offline operation
+const LOCAL_STORAGE_HISTORY_KEY = 'poweroptima_guest_history';
+const LOCAL_STORAGE_TARIFFS_KEY = 'poweroptima_guest_tariffs';
+
+export function getLocalHistory(): UserHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalHistory(item: UserHistoryItem): UserHistoryItem[] {
+  try {
+    const current = getLocalHistory();
+    const updated = [item, ...current.filter(i => i.id !== item.id)];
+    localStorage.setItem(LOCAL_STORAGE_HISTORY_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return [];
+  }
+}
+
+export function deleteLocalHistory(historyId: string): UserHistoryItem[] {
+  try {
+    const current = getLocalHistory();
+    const updated = current.filter(i => i.id !== historyId);
+    localStorage.setItem(LOCAL_STORAGE_HISTORY_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return [];
+  }
+}
+
+export function getLocalTariffs(): TariffConfig[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_TARIFFS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalTariff(tariff: TariffConfig): TariffConfig[] {
+  try {
+    const current = getLocalTariffs();
+    const updated = [...current.filter(t => t.id !== tariff.id), tariff];
+    localStorage.setItem(LOCAL_STORAGE_TARIFFS_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return [];
+  }
+}
+
+// Save user monthly budget (Firestore)
+export async function saveUserBudgetToFirestore(userId: string, email: string, monthlyBudget: number): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    const userRef = doc(db, 'users', userId);
+    await setDoc(userRef, {
+      userId,
+      email: email || '',
+      monthlyBudget,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+// Fetch user profile / budget (Firestore)
+export async function fetchUserProfile(userId: string): Promise<{ monthlyBudget?: number } | null> {
+  const path = `users/${userId}`;
+  try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    return userSnap.exists() ? (userSnap.data() as any) : null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+// Local Storage for monthly budget
+const LOCAL_STORAGE_BUDGET_KEY = 'poweroptima_monthly_budget';
+
+export function getLocalBudget(): number {
+  try {
+    const val = localStorage.getItem(LOCAL_STORAGE_BUDGET_KEY);
+    return val ? Number(val) : 350000;
+  } catch {
+    return 350000;
+  }
+}
+
+export function saveLocalBudget(budget: number): void {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_BUDGET_KEY, String(budget));
+  } catch {}
 }

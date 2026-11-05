@@ -128,7 +128,7 @@ npm run dev
 
 ## 6. Vercel Deployment Instructions
 
-This project is fully configured for zero-config deployment on Vercel (`vercel.json` included).
+This project is fully configured for zero-config deployment on Vercel (`vercel.json` included with SPA routing rewrites).
 
 ### Method A: Deploy via GitHub / Vercel Dashboard (Recommended)
 1. Push this repository to GitHub or GitLab.
@@ -137,6 +137,25 @@ This project is fully configured for zero-config deployment on Vercel (`vercel.j
 4. Build Command: `npm run build` (auto-detected).
 5. Output Directory: `dist` (auto-detected).
 6. Click **Deploy**.
+
+### Authorizing Google Login on Vercel
+After your app is deployed to Vercel (e.g. `https://your-project.vercel.app`):
+1. Open the [Firebase Console](https://console.firebase.google.com).
+2. Select your Firebase project.
+3. Navigate to **Authentication** &rarr; **Settings** &rarr; **Authorized domains**.
+4. Click **Add domain** and enter your Vercel deployment domain (e.g., `your-project.vercel.app`).
+5. Now users can sign in with their Google account directly on your live Vercel URL!
+*Note: If authorized domains are not configured yet, the app gracefully offers a 1-click **Guest / Demo Mode** with persistent browser storage so all features remain testable.*
+
+### Optional: Vercel Environment Variables
+If you wish to override the project's default Firebase credentials, you can add these in **Vercel Project Settings > Environment Variables**:
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_FIRESTORE_DATABASE_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
 
 ### Method B: Deploy via Vercel CLI
 ```bash

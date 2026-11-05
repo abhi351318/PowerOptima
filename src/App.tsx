@@ -54,6 +54,17 @@ function DashboardContent() {
   const [isTariffModalOpen, setIsTariffModalOpen] = useState(false);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
 
+  // Dynamic buildings and meters from active records
+  const availableBuildings = useMemo(() => {
+    const ids = Array.from(new Set(electricity.map((r) => r.building_id).filter(Boolean)));
+    return ids.length > 0 ? ids.sort() : ['B001', 'B002', 'B003'];
+  }, [electricity]);
+
+  const availableMeters = useMemo(() => {
+    const ids = Array.from(new Set(electricity.map((r) => r.meter_id).filter(Boolean)));
+    return ids.length > 0 ? ids.sort() : ['M001', 'M002', 'M003'];
+  }, [electricity]);
+
   // Filter records
   const filteredElectricity = useMemo(() => {
     let result = electricity;
@@ -65,10 +76,13 @@ function DashboardContent() {
       result = result.filter((r) => r.meter_id === selectedMeter);
     }
 
-    if (result.length > 0 && dateRangeDays < 28) {
+    if (result.length > 0 && dateRangeDays < 90) {
       const maxDate = new Date(result[result.length - 1].timestamp).getTime();
       const cutoff = maxDate - dateRangeDays * 24 * 3600 * 1000;
-      result = result.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+      const filtered = result.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+      if (filtered.length > 0) {
+        result = filtered;
+      }
     }
 
     return result;
@@ -140,6 +154,8 @@ function DashboardContent() {
         setSelectedBuilding={setSelectedBuilding}
         selectedMeter={selectedMeter}
         setSelectedMeter={setSelectedMeter}
+        availableBuildings={availableBuildings}
+        availableMeters={availableMeters}
         dateRangeDays={dateRangeDays}
         setDateRangeDays={setDateRangeDays}
         onOpenTariffModal={() => setIsTariffModalOpen(true)}
@@ -213,11 +229,15 @@ function DashboardContent() {
                 setWeather(fresh.weather);
                 setOccupancy(fresh.occupancy);
                 setEquipment(fresh.equipment);
+                setSelectedBuilding('ALL');
+                setSelectedMeter('ALL');
                 setIsSynthetic(true);
                 setCurrentReport(null);
               }}
               onElectricityLoaded={(records, report) => {
                 setElectricity(records);
+                setSelectedBuilding('ALL');
+                setSelectedMeter('ALL');
                 setIsSynthetic(false);
                 setCurrentReport(report);
               }}
@@ -230,6 +250,7 @@ function DashboardContent() {
               onEquipmentLoaded={(records) => {
                 setEquipment(records);
               }}
+              onNavigateToOverview={() => setCurrentPage('overview')}
               currentReport={currentReport}
               activeDatasetStats={{
                 totalRecords: electricity.length,

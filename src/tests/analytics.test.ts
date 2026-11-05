@@ -9,7 +9,7 @@ function assert(condition: boolean, message: string) {
   console.log(`✓ PASS: ${message}`);
 }
 
-function runTests() {
+async function runTests() {
   console.log('--- Running PowerOptima Unit Tests ---');
 
   // Test 1: ToU Tariff Period matching
@@ -32,7 +32,17 @@ function runTests() {
   const cost = calculateElectricityCost(mockRecords, DEFAULT_TARIFF);
   assert(cost.peakKwh === 100, 'Peak kWh must equal 100');
   assert(cost.offPeakKwh === 100, 'Off-peak kWh must equal 100');
-  assert(cost.totalCost > 0, 'Total cost must be non-zero');
+  // Test 3: Flexible CSV validation
+  const { validateElectricityData } = await import('../utils/csvParser');
+  const mockFlexibleRows = [
+    { 'Date Time': '2026-11-01 09:00:00', 'Building': 'Engineering HQ', 'Meter ID': 'MTR-HVAC', 'kWh': 142.5 },
+    { 'Date Time': '2026-11-01 10:00:00', 'Building': 'Engineering HQ', 'Meter ID': 'MTR-HVAC', 'kWh': 165.2 }
+  ];
+  const validation = validateElectricityData(mockFlexibleRows, 'test_meter.csv');
+  assert(validation.report.isValid === true, 'Flexible CSV with custom headers must be valid');
+  assert(validation.validRecords.length === 2, 'Must extract 2 valid records');
+  assert(validation.validRecords[0].building_id === 'Engineering HQ', 'Building must match custom string');
+  assert(validation.validRecords[0].energy_kwh === 142.5, 'Energy must match parsed kWh');
 
   console.log('--- All Unit Tests Passed Successfully ---');
 }

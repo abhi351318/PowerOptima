@@ -8,6 +8,74 @@ import type {
   ValidationReport
 } from '../types';
 
+/**
+ * Normalizes an object's keys by lowercasing and stripping punctuation and whitespace
+ */
+function normalizeKeys(row: Record<string, any>): Record<string, any> {
+  const normalized: Record<string, any> = {};
+  for (const key of Object.keys(row)) {
+    const cleanKey = key.toLowerCase().replace(/[\s_\-\(\)\/\\.]/g, '');
+    normalized[cleanKey] = row[key];
+  }
+  return normalized;
+}
+
+/**
+ * Robustly parses multiple date formats including Excel serial numbers,
+ * standard ISO strings, DD/MM/YYYY, and epoch timestamps.
+ */
+function parseDateRobust(raw: any): Date | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
+
+  if (typeof raw === 'number') {
+    // Excel serial dates: e.g. 45000 is ~2023
+    if (raw > 20000 && raw < 80000) {
+      return new Date(Math.round((raw - 25569) * 86400 * 1000));
+    }
+    // Unix epoch ms or seconds
+    if (raw > 1000000000000) return new Date(raw);
+    if (raw > 1000000000) return new Date(raw * 1000);
+  }
+
+  const str = String(raw).trim();
+  if (!str) return null;
+
+  // Standard ISO / JS string parse
+  const directDate = new Date(str);
+  if (!isNaN(directDate.getTime()) && directDate.getFullYear() > 1990 && directDate.getFullYear() < 2100) {
+    return directDate;
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[\sT](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10) - 1;
+    const year = parseInt(dmyMatch[3], 10);
+    const h = dmyMatch[4] ? parseInt(dmyMatch[4], 10) : 0;
+    const m = dmyMatch[5] ? parseInt(dmyMatch[5], 10) : 0;
+    const s = dmyMatch[6] ? parseInt(dmyMatch[6], 10) : 0;
+    const d = new Date(year, month, day, h, m, s);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // YYYY/MM/DD or YYYY-MM-DD
+  const ymdMatch = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[\sT](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (ymdMatch) {
+    const year = parseInt(ymdMatch[1], 10);
+    const month = parseInt(ymdMatch[2], 10) - 1;
+    const day = parseInt(ymdMatch[3], 10);
+    const h = ymdMatch[4] ? parseInt(ymdMatch[4], 10) : 0;
+    const m = ymdMatch[5] ? parseInt(ymdMatch[5], 10) : 0;
+    const s = ymdMatch[6] ? parseInt(ymdMatch[6], 10) : 0;
+    const d = new Date(year, month, day, h, m, s);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  return null;
+}
+
 export function parseCSVorExcel(
   file: File
 ): Promise<{ data: any[]; errors: string[]; fileName: string }> {
@@ -19,7 +87,11 @@ export function parseCSVorExcel(
       reader.onload = (e) => {
         try {
           const buffer = e.target?.result;
-          const workbook = XLSX.read(buffer, { type: 'array' });
+          const workbook = XLSX.read(buffer, {
+            type: 'array',
+            cellDates: true,
+            dateNF: 'yyyy-mm-dd hh:mm:ss'
+          });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -28,12 +100,12 @@ export function parseCSVorExcel(
           reject(new Error(`Failed to parse Excel file: ${err.message}`));
         }
       };
-      reader.onerror = () => reject(new Error('File reading failed'));
+      reader.onerror = () => reject(new Error('File reading failed.'));
       reader.readAsArrayBuffer(file);
     } else {
       Papa.parse(file, {
         header: true,
-        skipEmptyLines: true,
+        skipEmptyLines: 'greedy',
         dynamicTyping: true,
         complete: (results) => {
           resolve({
@@ -86,69 +158,89 @@ export function validateElectricityData(
     };
   }
 
-  // Check required columns
-  const firstRow = rawData[0];
-  const requiredCols = ['timestamp', 'building_id', 'meter_id', 'energy_kwh'];
-  const missingCols = requiredCols.filter(
-    (col) => !(col in firstRow) && !(col.toLowerCase() in firstRow)
-  );
+  // Inspect headers in first available row
+  const firstRow = normalizeKeys(rawData[0] || {});
+  const hasTimestamp = 'timestamp' in firstRow || 'datetime' in firstRow || 'date' in firstRow || 'time' in firstRow;
+  const hasEnergy = 'energykwh' in firstRow || 'kwh' in firstRow || 'energy' in firstRow || 'consumption' in firstRow || 'usage' in firstRow || 'value' in firstRow;
 
-  if (missingCols.length > 0) {
-    errors.push(`Missing mandatory column(s): ${missingCols.join(', ')}`);
+  if (!hasTimestamp) {
+    errors.push('Missing timestamp column. Expected header named "timestamp", "date", or "datetime".');
+  }
+  if (!hasEnergy) {
+    errors.push('Missing electricity consumption column. Expected header named "energy_kwh", "kwh", "energy", or "consumption".');
   }
 
-  // Detect cumulative vs interval check
-  let isMonotonicallyIncreasing = true;
-  let prevKwh = -1;
-  let checkedCount = 0;
+  if (errors.length > 0) {
+    return {
+      validRecords: [],
+      report: {
+        fileName,
+        datasetType: 'electricity',
+        totalRows: rawData.length,
+        acceptedRows: 0,
+        rejectedRows: rawData.length,
+        missingValuesCount: rawData.length,
+        duplicateCount: 0,
+        timestampGapsCount: 0,
+        detectedIntervalMinutes: 60,
+        buildingsFound: [],
+        metersFound: [],
+        warnings,
+        errors,
+        isValid: false
+      }
+    };
+  }
 
-  rawData.forEach((row, idx) => {
-    // Column normalization
-    const timestampRaw = row.timestamp || row.Timestamp || row.TIMESTAMP;
-    const buildingIdRaw = row.building_id || row.building || row.Building_ID || row.BUILDING_ID;
-    const meterIdRaw = row.meter_id || row.meter || row.Meter_ID || row.METER_ID;
-    const energyKwhRaw = row.energy_kwh ?? row.energy ?? row.kWh ?? row.Energy_kWh;
-    const powerKwRaw = row.average_power_kw ?? row.power_kw ?? row.Power_kW;
-    const statusRaw = row.meter_status || row.status || 'normal';
+  rawData.forEach((rawRow, idx) => {
+    if (!rawRow || typeof rawRow !== 'object') {
+      rejectedRows++;
+      return;
+    }
 
-    if (!timestampRaw || !buildingIdRaw || !meterIdRaw || energyKwhRaw === undefined || energyKwhRaw === '') {
+    const norm = normalizeKeys(rawRow);
+
+    // Resolve timestamp
+    const tsRaw = norm['timestamp'] ?? norm['datetime'] ?? norm['date'] ?? norm['time'];
+    const parsedDate = parseDateRobust(tsRaw);
+    if (!parsedDate) {
+      rejectedRows++;
+      missingValuesCount++;
+      if (idx < 5) warnings.push(`Row ${idx + 1}: Unrecognized or missing timestamp "${tsRaw}".`);
+      return;
+    }
+
+    // Resolve energy
+    const energyRaw = norm['energykwh'] ?? norm['kwh'] ?? norm['energy'] ?? norm['consumption'] ?? norm['usage'] ?? norm['value'];
+    if (energyRaw === undefined || energyRaw === null || energyRaw === '') {
       rejectedRows++;
       missingValuesCount++;
       return;
     }
-
-    const energyNum = Number(energyKwhRaw);
+    const energyNum = Number(energyRaw);
     if (isNaN(energyNum) || energyNum < 0) {
       rejectedRows++;
-      warnings.push(`Row ${idx + 1}: Invalid energy_kwh value "${energyKwhRaw}". Must be non-negative number.`);
+      if (idx < 5) warnings.push(`Row ${idx + 1}: Non-numeric or negative consumption "${energyRaw}".`);
       return;
     }
 
-    // Cumulative check
-    if (checkedCount < 50) {
-      if (prevKwh !== -1 && energyNum > prevKwh * 1.5 && prevKwh > 50) {
-        // Potential cumulative meter reading detection
-      }
-      prevKwh = energyNum;
-      checkedCount++;
-    }
+    // Resolve building ID & meter ID (graceful fallbacks if file is single-meter)
+    const bId = String(norm['buildingid'] ?? norm['building'] ?? norm['site'] ?? norm['facility'] ?? 'Main Campus').trim();
+    const mId = String(norm['meterid'] ?? norm['meter'] ?? norm['sensor'] ?? 'M001').trim();
 
-    // Date check
-    const parsedDate = new Date(timestampRaw);
-    if (isNaN(parsedDate.getTime())) {
-      rejectedRows++;
-      warnings.push(`Row ${idx + 1}: Invalid timestamp format "${timestampRaw}". Expected ISO format.`);
-      return;
-    }
+    // Resolve power (kW)
+    const powerRaw = norm['averagepowerkw'] ?? norm['powerkw'] ?? norm['power'] ?? norm['kw'];
+    const powerNum = powerRaw !== undefined && powerRaw !== '' && !isNaN(Number(powerRaw)) ? Number(powerRaw) : energyNum;
 
-    const bId = String(buildingIdRaw).trim();
-    const mId = String(meterIdRaw).trim();
+    // Resolve status
+    const statusRaw = String(norm['meterstatus'] ?? norm['status'] ?? 'normal').toLowerCase();
+    const meterStatus = ['normal', 'estimated', 'missing'].includes(statusRaw) ? (statusRaw as any) : 'normal';
+
     const key = `${parsedDate.toISOString()}_${bId}_${mId}`;
-
     if (seenKeys.has(key)) {
       duplicateCount++;
       rejectedRows++;
-      return; // Skip duplicate
+      return;
     }
     seenKeys.add(key);
 
@@ -160,34 +252,30 @@ export function validateElectricityData(
       building_id: bId,
       meter_id: mId,
       energy_kwh: energyNum,
-      average_power_kw: powerKwRaw !== undefined && !isNaN(Number(powerKwRaw)) ? Number(powerKwRaw) : undefined,
-      meter_status: ['normal', 'estimated', 'missing'].includes(String(statusRaw).toLowerCase())
-        ? (String(statusRaw).toLowerCase() as any)
-        : 'normal'
+      average_power_kw: powerNum,
+      meter_status: meterStatus
     });
   });
 
-  // Sort chronologically
+  // Sort records chronologically
   validRecords.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-  // Detect interval & gaps
+  // Detect interval and gap patterns
   let timestampGapsCount = 0;
   let detectedIntervalMinutes = 60;
   if (validRecords.length > 2) {
     const diffs: number[] = [];
-    for (let i = 1; i < Math.min(validRecords.length, 50); i++) {
+    for (let i = 1; i < Math.min(validRecords.length, 60); i++) {
       const d1 = new Date(validRecords[i - 1].timestamp).getTime();
       const d2 = new Date(validRecords[i].timestamp).getTime();
       const diffMin = Math.round((d2 - d1) / 60000);
       if (diffMin > 0) diffs.push(diffMin);
     }
     if (diffs.length > 0) {
-      // Find median interval
       diffs.sort((a, b) => a - b);
       detectedIntervalMinutes = diffs[Math.floor(diffs.length / 2)] || 60;
     }
 
-    // Scan for gap intervals greater than 1.5x expected interval
     for (let i = 1; i < validRecords.length; i++) {
       const d1 = new Date(validRecords[i - 1].timestamp).getTime();
       const d2 = new Date(validRecords[i].timestamp).getTime();
@@ -232,24 +320,28 @@ export function validateWeatherUpload(
   const validRecords: WeatherRecord[] = [];
 
   rawData.forEach((row, idx) => {
-    const ts = row.timestamp || row.Timestamp;
-    const loc = row.location_id || row.location || 'LOC-01';
-    const temp = row.temperature_c ?? row.temperature ?? row.temp;
-    const hum = row.humidity_pct ?? row.humidity;
-    const cond = row.weather_condition || row.condition || 'Clear';
+    if (!row || typeof row !== 'object') return;
+    const norm = normalizeKeys(row);
 
-    if (!ts || temp === undefined || isNaN(Number(temp))) {
+    const tsRaw = norm['timestamp'] ?? norm['datetime'] ?? norm['date'];
+    const parsedDate = parseDateRobust(tsRaw);
+    if (!parsedDate) return;
+
+    const loc = String(norm['locationid'] ?? norm['location'] ?? 'LOC-01').trim();
+    const tempRaw = norm['temperaturec'] ?? norm['temperature'] ?? norm['temp'];
+    const humRaw = norm['humiditypct'] ?? norm['humidity'];
+    const cond = String(norm['weathercondition'] ?? norm['condition'] ?? 'Clear').trim();
+
+    if (tempRaw === undefined || tempRaw === null || tempRaw === '' || isNaN(Number(tempRaw))) {
       return;
     }
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) return;
 
     validRecords.push({
-      timestamp: d.toISOString(),
-      location_id: String(loc).trim(),
-      temperature_c: Number(temp),
-      humidity_pct: hum !== undefined && !isNaN(Number(hum)) ? Number(hum) : undefined,
-      weather_condition: String(cond).trim()
+      timestamp: parsedDate.toISOString(),
+      location_id: loc,
+      temperature_c: Number(tempRaw),
+      humidity_pct: humRaw !== undefined && !isNaN(Number(humRaw)) ? Number(humRaw) : undefined,
+      weather_condition: cond
     });
   });
 
@@ -279,20 +371,24 @@ export function validateOccupancyUpload(
   fileName: string
 ): { validRecords: OccupancyRecord[]; report: ValidationReport } {
   const validRecords: OccupancyRecord[] = [];
-  rawData.forEach((row) => {
-    const ts = row.timestamp || row.Timestamp;
-    const bId = row.building_id || row.building;
-    const count = row.occupancy_count ?? row.count ?? row.occupancy;
-    if (!ts || !bId || count === undefined || isNaN(Number(count))) return;
 
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) return;
+  rawData.forEach((row) => {
+    if (!row || typeof row !== 'object') return;
+    const norm = normalizeKeys(row);
+
+    const tsRaw = norm['timestamp'] ?? norm['datetime'] ?? norm['date'];
+    const parsedDate = parseDateRobust(tsRaw);
+    if (!parsedDate) return;
+
+    const bId = String(norm['buildingid'] ?? norm['building'] ?? 'Main Campus').trim();
+    const countRaw = norm['occupancycount'] ?? norm['count'] ?? norm['occupancy'] ?? norm['headcount'];
+    if (countRaw === undefined || isNaN(Number(countRaw))) return;
 
     validRecords.push({
-      timestamp: d.toISOString(),
-      building_id: String(bId).trim(),
-      occupancy_count: Math.max(0, Math.round(Number(count))),
-      occupancy_source: row.occupancy_source || 'Access System'
+      timestamp: parsedDate.toISOString(),
+      building_id: bId,
+      occupancy_count: Math.max(0, Math.round(Number(countRaw))),
+      occupancy_source: String(norm['occupancysource'] ?? norm['source'] ?? 'Access System')
     });
   });
 
@@ -322,25 +418,30 @@ export function validateEquipmentUpload(
   fileName: string
 ): { validRecords: EquipmentRecord[]; report: ValidationReport } {
   const validRecords: EquipmentRecord[] = [];
-  rawData.forEach((row) => {
-    const eqId = row.equipment_id || row.id;
-    const bId = row.building_id || row.building;
-    const type = row.equipment_type || row.type;
-    const kw = row.rated_power_kw ?? row.power_kw ?? row.power;
-    const flex = row.flexible_load;
 
-    if (!eqId || !bId || !type || kw === undefined || isNaN(Number(kw))) return;
+  rawData.forEach((row) => {
+    if (!row || typeof row !== 'object') return;
+    const norm = normalizeKeys(row);
+
+    const eqId = String(norm['equipmentid'] ?? norm['id'] ?? norm['assetid'] ?? '').trim();
+    const bId = String(norm['buildingid'] ?? norm['building'] ?? 'Main Campus').trim();
+    const type = String(norm['equipmenttype'] ?? norm['type'] ?? 'General Load').trim();
+    const kwRaw = norm['ratedpowerkw'] ?? norm['powerkw'] ?? norm['power'] ?? norm['kw'];
+
+    if (!eqId || kwRaw === undefined || isNaN(Number(kwRaw))) return;
+
+    const flexRaw = norm['flexibleload'] ?? norm['flexible'];
 
     validRecords.push({
-      equipment_id: String(eqId).trim(),
-      building_id: String(bId).trim(),
-      equipment_type: String(type).trim(),
-      rated_power_kw: Number(kw),
-      flexible_load: String(flex).toLowerCase() === 'true' || flex === 1 || flex === true,
-      earliest_start_time: row.earliest_start_time || '00:00',
-      latest_end_time: row.latest_end_time || '23:59',
-      required_runtime_minutes: Number(row.required_runtime_minutes) || 240,
-      operating_constraints: row.operating_constraints || ''
+      equipment_id: eqId,
+      building_id: bId,
+      equipment_type: type,
+      rated_power_kw: Number(kwRaw),
+      flexible_load: String(flexRaw).toLowerCase() === 'true' || flexRaw === 1 || flexRaw === true,
+      earliest_start_time: norm['earlieststarttime'] || '00:00',
+      latest_end_time: norm['latestendtime'] || '23:59',
+      required_runtime_minutes: Number(norm['requiredruntimeminutes']) || 240,
+      operating_constraints: norm['operatingconstraints'] || ''
     });
   });
 
@@ -371,7 +472,7 @@ export function downloadTemplate(
   format: 'csv' | 'xlsx'
 ) {
   let sampleRows: any[] = [];
-  let fileName = `template_${type}.${format}`;
+  const fileName = `template_${type}.${format}`;
 
   if (type === 'electricity') {
     sampleRows = [
