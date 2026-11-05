@@ -1,0 +1,6 @@
+{
+  "name": "PowerOptima - Commercial Energy & Cost Analytics",
+  "description": "AI-powered energy consumption forecasting, tariff cost optimization, and load scheduling dashboard for commercial campuses and buildings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

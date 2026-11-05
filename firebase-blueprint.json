@@ -1,0 +1,194 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile and dashboard preferences",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 128
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User profile photo URL",
+          "maxLength": 1024
+        },
+        "monthlyBudget": {
+          "type": "number",
+          "description": "Target monthly electricity budget in INR"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation ISO timestamp or server timestamp",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last updated ISO timestamp or server timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["userId", "email"]
+    },
+    "UserHistoryItem": {
+      "title": "UserHistoryItem",
+      "description": "Saved analysis scenario, dataset run, or optimization snapshot for user history",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique history identifier",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "description": "User-facing title of the saved analysis run",
+          "maxLength": 256
+        },
+        "buildingId": {
+          "type": "string",
+          "description": "Building identifier analyzed",
+          "maxLength": 64
+        },
+        "meterId": {
+          "type": "string",
+          "description": "Meter identifier analyzed",
+          "maxLength": 64
+        },
+        "dateRange": {
+          "type": "string",
+          "description": "Date range of the data analysed",
+          "maxLength": 128
+        },
+        "totalKwh": {
+          "type": "number",
+          "description": "Total energy consumption in kWh"
+        },
+        "totalCost": {
+          "type": "number",
+          "description": "Total electricity cost in INR"
+        },
+        "projectedSavings": {
+          "type": "number",
+          "description": "Estimated potential savings in INR"
+        },
+        "forecastReliabilityScore": {
+          "type": "number",
+          "description": "Calculated forecast reliability score percentage"
+        },
+        "mae": {
+          "type": "number",
+          "description": "Mean Absolute Error in kWh"
+        },
+        "rmse": {
+          "type": "number",
+          "description": "Root Mean Squared Error in kWh"
+        },
+        "datasetSummary": {
+          "type": "string",
+          "description": "JSON string or summary description of the dataset",
+          "maxLength": 10000
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "title"]
+    },
+    "TariffConfiguration": {
+      "title": "TariffConfiguration",
+      "description": "User configured electricity tariff schedule",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique tariff config ID",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Tariff plan name",
+          "maxLength": 128
+        },
+        "peakRate": {
+          "type": "number",
+          "description": "Rate during peak hours in INR/kWh"
+        },
+        "normalRate": {
+          "type": "number",
+          "description": "Rate during normal hours in INR/kWh"
+        },
+        "offPeakRate": {
+          "type": "number",
+          "description": "Rate during off-peak hours in INR/kWh"
+        },
+        "fixedMonthlyCharge": {
+          "type": "number",
+          "description": "Fixed charges in INR"
+        },
+        "demandChargePerKw": {
+          "type": "number",
+          "description": "Demand charge per kW in INR"
+        },
+        "taxPercentage": {
+          "type": "number",
+          "description": "Applicable tax percentage"
+        },
+        "peakHours": {
+          "type": "string",
+          "description": "Peak hours definition (e.g., 09:00-12:00, 18:00-22:00)",
+          "maxLength": 256
+        },
+        "offPeakHours": {
+          "type": "string",
+          "description": "Off-peak hours definition (e.g., 22:00-06:00)",
+          "maxLength": 256
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last updated timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document storing basic account preferences"
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": "UserHistoryItem",
+      "description": "Subcollection storing analysis snapshots, uploaded dataset history, and optimization metrics"
+    },
+    "/users/{userId}/tariffs/{tariffId}": {
+      "schema": "TariffConfiguration",
+      "description": "Subcollection storing user defined tariff rates and peak schedules"
+    }
+  }
+}
